@@ -1,2 +1,2 @@
-(library (name embed_file_lib) (libraries async core)
+(library (name embed_file_lib) (libraries core_kernel.version_util core_kernel)
  (preprocess (pps ppx_jane)))

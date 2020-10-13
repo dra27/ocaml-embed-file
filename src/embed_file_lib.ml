@@ -1,5 +1,4 @@
-open! Core
-open! Async
+open! Core_kernel
 
 let variable_name_of_file_name s =
   String.to_list s
@@ -39,40 +38,40 @@ let replace_CRs : string -> string =
 ;;
 
 let write_ml w ~var ~contents =
-  Writer.writef w "let %s =\n  \"" var;
+  Stdio.Out_channel.fprintf w "let %s =\n  \"" var;
   List.iteri (chunks contents) ~f:(fun i chunk ->
     let escaped_chunk = replace_CRs (String.escaped chunk) in
     if i = 0
-    then Writer.writef w "%s" escaped_chunk
+    then Stdio.Out_channel.fprintf w "%s" escaped_chunk
     else if String.length chunk > 0 && Char.( = ) chunk.[0] ' '
-    then Writer.writef w "\\\n  \\%s" escaped_chunk
-    else Writer.writef w "\\\n   %s" escaped_chunk);
-  Writer.write w "\"\n;;\n"
+    then Stdio.Out_channel.fprintf w "\\\n  \\%s" escaped_chunk
+    else Stdio.Out_channel.fprintf w "\\\n   %s" escaped_chunk);
+  Stdio.Out_channel.output_string w "\"\n;;\n"
 ;;
 
 let write_alist_ml w ~files =
-  Writer.write_line w "\nlet by_filename =";
+  Stdio.Out_channel.output_lines w ["\nlet by_filename ="];
   let line_start = ref "[" in
   Map.iteri files ~f:(fun ~key:file ~data:var ->
-    Writer.writef w "  %s \"%s\", %s\n" !line_start file var;
+    Stdio.Out_channel.fprintf w "  %s \"%s\", %s\n" !line_start file var;
     line_start := ";");
-  Writer.write_line w "  ]";
-  Writer.write_line w ";;"
+  Stdio.Out_channel.output_lines w ["  ]"];
+  Stdio.Out_channel.output_lines w [";;"]
 ;;
 
-let write_mli w ~var = Writer.writef w "val %s : string\n" var
+let write_mli w ~var = Stdio.Out_channel.fprintf w "val %s : string\n" var
 
 let write_alist_mli w =
-  Writer.write_line
+  Stdio.Out_channel.output_lines
     w
-    "\n\
-     (** an association list mapping the embedded file basenames to their string values \
-     *)";
-  Writer.write_line w "val by_filename : (string * string) list"
+    ["\n\
+      (** an association list mapping the embedded file basenames to their string values \
+      *)";
+     "val by_filename : (string * string) list"];
 ;;
 
 let command =
-  Command.async
+  Command.basic
     ~summary:"embed text files as ocaml strings"
     ~readme:(fun () ->
       {|
@@ -85,13 +84,12 @@ files.
      and output_directory =
        flag
          "output-dir"
-         (optional_with_default "." Filename.arg_type)
+         (optional_with_default "." string)
          ~doc:"PATH where to put the generated module (default = cwd)"
      and with_alist =
        flag "with-alist" no_arg ~doc:"include an alist of file basename -> file contents"
      and paths = anon (non_empty_sequence_as_list ("FILE" %: string)) in
      fun () ->
-       let open Deferred.Let_syntax in
        (* normalize module name *)
        let module_name =
          module_name
@@ -101,37 +99,32 @@ files.
        in
        let filename ext = output_directory ^/ String.lowercase module_name ^ "." ^ ext in
        let write ext ~write_file_line ~write_alist =
-         Writer.with_file (filename ext) ~f:(fun w ->
+         Stdio.Out_channel.with_file (filename ext) ~f:(fun w ->
            let first_time = ref true in
-           let%bind files =
-             Deferred.List.map paths ~f:(fun path ->
-               if !first_time then first_time := false else Writer.newline w;
+           let files =
+             List.map paths ~f:(fun path ->
+               if !first_time then first_time := false else Stdio.Out_channel.newline w;
                let basename = Filename.basename path in
                let var = variable_name_of_file_name basename in
-               let%map () = write_file_line w ~var ~path in
+               let () = write_file_line w ~var ~path in
                basename, var)
-             >>| String.Map.of_alist_exn
+             |> String.Map.of_alist_exn
            in
-           if with_alist then write_alist w ~files;
-           Deferred.unit)
+           if with_alist then write_alist w ~files)
        in
-       let%bind () =
+       let () =
          write
            "ml"
            ~write_file_line:(fun w ~var ~path ->
-             let%map contents = Reader.file_contents path in
+             let contents = Stdio.In_channel.read_all path in
              write_ml w ~var ~contents)
            ~write_alist:(fun w ~files -> write_alist_ml w ~files)
        in
-       let%bind () =
-         write
-           "mli"
-           ~write_file_line:(fun w ~var ~path:_ ->
-             write_mli w ~var;
-             Deferred.unit)
-           ~write_alist:(fun w ~files:_ -> write_alist_mli w)
-       in
-       Deferred.unit)
+       write
+         "mli"
+         ~write_file_line:(fun w ~var ~path:_ ->
+           write_mli w ~var)
+         ~write_alist:(fun w ~files:_ -> write_alist_mli w))
 ;;
 
 module Private = struct
